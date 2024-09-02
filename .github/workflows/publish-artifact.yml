@@ -36,15 +36,15 @@ jobs:
           mv *.zip $RELEASE_DIR/ 
           # zip -r artifacts.zip $RELEASE_DIR/
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v2 
-        with:
-          name: artifacts 
-          path: releases 
+      # - name: Upload artifact
+      #   uses: actions/upload-artifact@v2 
+      #   with:
+      #     name: artifacts 
+      #     path: releases 
       - name: Create release 
         uses: AButler/upload-release-assets@v3.0
         with:
-          files: "artifacts.zip;"
+          files: "releases/*.zip"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           release-id: 1
           
