@@ -6,7 +6,8 @@ name: CI
 on:
   # Triggers the workflow on push or pull request events but only for the "main" branch
   push:
-    branches: [ "main" ]
+    tags:
+      - '*'
 
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
@@ -34,17 +35,27 @@ jobs:
 
           mkdir -vp $RELEASE_DIR
           mv *.zip $RELEASE_DIR/ 
-          # zip -r artifacts.zip $RELEASE_DIR/
+          zip -r artifacts.zip $RELEASE_DIR/
 
-      # - name: Upload artifact
-      #   uses: actions/upload-artifact@v2 
-      #   with:
-      #     name: artifacts 
-      #     path: releases 
-      - name: Create release 
-        uses: AButler/upload-release-assets@v3.0
+      - name: Create Release 
+        uses: actions/create-release@v1 
+        id: create_release 
         with:
-          files: "releases/*.zip"
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-          release-id: 1
+          draft: false
+          prerelease: false 
+          release_name: "Release ${{ github.ref }}"
+          tag_name: ${{ github.ref }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifact
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./artifacts.zip 
+          asset_name: dcsforazure-pipeline.zip
+          asset_content_type: application/zip 
+        
           
