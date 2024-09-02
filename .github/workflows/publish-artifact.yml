@@ -44,7 +44,7 @@ jobs:
       - name: Create release 
         uses: AButler/upload-release-assets@v3.0
         with:
-          files: "artifacts.zip"
+          files: "artifacts.zip;releases/*.zip"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-          release-tag: v1.0.0
+          release-id: 1
           
