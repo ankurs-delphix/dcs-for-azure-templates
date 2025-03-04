@@ -11,55 +11,110 @@ Note that changes to the metadata store may change the masking parameters comput
 ## Structure
 
 The general flow of the data in the dataflow is as follows:
-```
-[A] → [B] → [C] → [D] → [E] → [G] → [I] → [J] → [K] → [R] → [S]
-       ↓              ↓              ↑                 ↑
-       ↓              → [F] → [H] -→ ↑                 ↑
-       ↓                                               ↑
-      [N] → [O] → [P] → [Q] ------→------→------→------↑
-       ↑                                        
-[L] → [M]
-```
-The dataflow will vary slightly based on the data set it was constructed for (e.g. `SNOWFLAKE`, `DATABRICKS`, `ADLS`).
-However, each version of the dataset will contain the following steps.
+```mermaid
+flowchart LR
+  Ruleset --> FilterToSingleTable
+  TypeMapping --> FilterToDataSourceType --> StringCastingWithAdfType
+  FilterToDataSourceType --> RulesetWithTypes
 
-* `[A]` Data Source - `Ruleset` - Get the ruleset table from the metadata store at
+  FilterToSingleTable --> ParseMetadata
+
+  ParseMetadata --> StringCastingHandling -->
+  FilterToRowsWithStringCasting --> CreateColumnsToCastAsStrings --> CombineAllStringCastingParameters
+  FilterToRowsWithStringCasting --> StringCastingWithAdfType --> CreateColumnsToCastBackTo --> 
+    CreateColumnsToCastBackParameters --> AggregateColumnsToCastBackParameters --> CombineAllStringCastingParameters
+
+  ParseMetadata --> DateFormatString --> ContainsDateFormat --> DateFormatHeader --> JoinDateHeaders
+  DateFormatString --> DoesNotContainDateFormat --> NoFormatHeader --> JoinDateHeaders -->
+  DateFormatHeaderHandlingNulls  --> JoinDateAndStringCastingParameters
+
+  CombineAllStringCastingParameters -->
+  JoinDateAndStringCastingParameters --> RemoveUnnecessaryColumns --> ComputeCastingDefaultsIfMissing
+
+  FilterToSingleTable --> RulesetWithTypes --> RulesetWithAlgorithmTypeMapping --> GenerateMaskParameters -->
+    ModifyNumberOfBatches --> AllMaskingParameters
+
+  ComputeCastingDefaultsIfMissing --> AllMaskingParameters --> MaskingParameterOutput
+```
+The dataflow will vary slightly based on the data set it was constructed for (e.g. `SNOWFLAKE`, `DATABRICKS`,
+`ADLS-PARQUET`). However, each version of the dataset will contain the following steps.
+
+* `Ruleset` - Data Source - Get the ruleset table from the metadata store at
 `DF_METADATA_SCHEMA`.`DF_METADATA_RULESET_TABLE`
-* `[B]` Filter - `FilterToSingleTable` - Filter ruleset table down to the table in question by specifying `dataset`,
+* `FilterToSingleTable` - Filter - Filter ruleset table down to the table in question by specifying `dataset`,
 `specified_database`, `specified_schema`, `identified_table`, and `assigned_algorithm` - making sure they match
 the dataset associated with each version of the dataflow, `DF_SOURCE_DATABASE`, `DF_SOURCE_SCHEMA`, `DF_SOURCE_TABLE`,
 and not empty or null (respectively). This filters the ruleset down to only the rules that need to be applied for
 masking this particular table
-* `[C]` Parse - `ParseMetadata` - Parse the content from the `metadata` column that contains JSON, specifically
-handling parsing of known keys (i.e. `date_format`)
-* `[D]` Derived Column - `DateFormatString` - Derive columns as necessary for handling the parsed data (i.e. consume
-  `parsed_metadata.date_format` and put it in a column `date_format_string`), and add an `output_row` column that
-  always contains `1` (used later for Aggregate and Join operations)
-* Conditional Split - `SplitOnDateFormat` - Split the data into two streams, data that contains a specified date
+* `ParseMetadata` - Parse - Parse the content from the `algorithm_metadata` column that contains JSON, specifically
+handling parsing of known keys (i.e. `treat_as_string`, `date_format`)
+* `StringCastingHandling` - Derived Column - Derive columns for handling string casting. Generate several columns:
+  * `output_row` - always contains `1` (used later for Aggregate and Join operations)
+  * `treat_as_string` - represents `parsed_metadata.treat_as_string`
+* `FilterToRowsWithStringCasting` - Filter - Filtering rows where `treat_as_string` is true
+* `CreateColumnsToCastAsStrings` - Aggregate - Aggregating column names to produce `ColumnsToCastAsStrings`
+* `CreateColumnsToCastBackParameters` - Derived Column - Create `ColumnsToCastBackTo*` by taking only relevant rows and
+setting the value to null otherwise, so that it can be aggregated
+* `AggregateColumnsToCastBackParameters` - Aggregate - Take the correct value of `ColumnsToCastBackTo` based on the
+`adf_type`
+* `StringCastingWithAdfType` - Join - Join columns that need to be cast to string and the type mapping table, so we can
+determine casting requirements
+* `CreateColumnsToCastBackTo` - Aggregate - Aggregating column names by `adf_type` to produce `ColumnsToCastBackTo`,
+which consists of a list of columns, separated by `","` so that when they are aggregated via `collect` later the list
+of items is an array of quote-wrapped column names
+  * This results in a table that contains `adf_type` and `ColumnsToCastBackTo`
+  * Suppose we had columns `A`, `B`, and `C` that were to be cast back to `float`, and `D` was to  be cast back to
+    `double`, then this table would contain the following data (`adf_type`, `ColumnsToCastBackTo`):
+    (`float`, `A","B","C`), (`double`, `D`)
+* `CreateColumnsToCastBackParameters` - Derived Column - Take the correct value of `ColumnsToCastBackTo` based on the
+`adf_type`, one for each of the types we need to cast back to: `Binary`, `Boolean`, `Date`, `Double`, `Float`,
+`Integer`, `Long`, `Timestamp`. This will create the following columns, which will be `NULL` unless there are any
+values associated with `ColumnsToCastBackTo` and the associated type:
+  * `ColumnsToCastBackToBinary`
+  * `ColumnsToCastBackToBoolean`
+  * `ColumnsToCastBackToDate`
+  * `ColumnsToCastBackToDouble`
+  * `ColumnsToCastBackToFloat`
+  * `ColumnsToCastBackToInteger`
+  * `ColumnsToCastBackToLong`
+  * `ColumnsToCastBackToTimestamp`
+* `AggregateColumnsToCastBackToParameters` - Aggregate - Create `ColumnsToCastBackTo*` by collecting on the previously
+computed columns
+  * When collected, this will wrap the previous values in `["` and `"]`, resulting in the aggregated column looking like
+    a list of column names that need to be cast back to the specified column type
+* `CombineAllStringCastingParameters` - Join - Combine tables to have `ColumnsToCastAsStrings` and
+`ColumnsToCastBackTo*` parameters
+* `DateFormatString` - Derived Column - Derive columns for handling date formats. Generate several columns:
+  * `output_row` - always contains `1` (used later for Aggregate and Join operations)
+  * `date_format` - represents `parsed_metadata.date_format`
+* `SplitOnDateFormat` - Conditional Split - Split the data into two streams, data that contains a specified date
 format, and data that does not
-  * `[E]` Conditional Split Stream - `ContainsDateFormat` - Stream of data that contains a date format
-  * `[F]` Conditional Split Stream - `DoesNotContainDateFormat` - Stream of data that does not contain a date format
-* `[G]` Aggregate - `DateFormatHeader` - Create DateFormatAssignment, grouped by output_row (which is always 1),
+  * `ContainsDateFormat` - Conditional Split Stream - Stream of data that contains a date format
+  * `DoesNotContainDateFormat` - Conditional Split Stream - Stream of data that does not contain a date format
+* `DateFormatHeader` - Aggregate - Create DateFormatAssignment, grouped by output_row (which is always `1`),
 generating a JSON string that maps a column to its specified date format
-* `[H]` Aggregate - `NoFormatHeader` - Create NoFormatHeader, that generates a JSON string containing an empty map when
-all values are null, grouped by output_row (which is always 1)
-* `[I]` Join - `JoinDateHeaders` - Full outer join both `DateFormatHeader` and `NoFormatHeader` where `output_row` =
+* `NoFormatHeader` - Aggregate - Create NoFormatHeader, that generates a JSON string containing an empty map when
+all values are null, grouped by output_row (which is always `1`)
+* `JoinDateHeaders` - Join - Full outer join both `DateFormatHeader` and `NoFormatHeader` where `output_row` =
 `output_row`
-* `[J]` Derived Column - `DateFormatHeaderHandlingNulls` - Update column `DateFormatAssignments` to coalesce
+* `DateFormatHeaderHandlingNulls` - Derived Column - Update column `DateFormatAssignments` to coalesce
 `DateFormatAssignments`, and `NoFormatHeader` (i.e. if `DateFormatAssignments` is null, take `NoFormatHeader`, which
 won't be null), similarly with `output_row`
-* `[K]` Select - `RemoveUnnecessaryColumns` - Remove intermediate columns
-* `[L]` Data Source - `TypeMapping` - Get the type mapping table from the metadata store at
+* `JoinDateAndStringCastingParameters` - Join - Combine date parsing and string casting parameters into one table
+* `RemoveUnnecessaryColumns` - Select - Remove redundant columns after joining date format and string casting parameters
+* `ComputeCastingDefaultsIfMissing` - Derived Column - For all casting parameters that are currently `NULL`, set them
+instead to the empty list, this applies only to columns starting with `ColumnsToCast`
+* `TypeMapping` - Data Source - Get the type mapping table from the metadata store at
 `DF_METADATA_STORE`.`DF_METADATA_ADF_TYPE_MAPPING_TABLE`
-* `[M]` Filter - `FilterToDataSourceType` - Filter type mapping table down to only the dataset in question
-* `[N]` Join - `RulesetWithTypes` - Join the ruleset table with the type mapping table based on the type of the column
+* `FilterToDataSourceType` - Filter - Filter type mapping table down to only the dataset in question
+* `RulesetWithTypes` - Join - Join the ruleset table with the type mapping table based on the type of the column
 and the translation of that type to an ADF type
-* `[O]` Derived Column - `RulesetWithAlgorithmTypeMapping` - Generate several columns:
-  * `output_row` that always contains `1` (used later for Aggregate and Join operations)
-  * `adf_type_conversion` that contains a string like `<column_name> as <adf_type>`
-  * `column_width_estimate` that contains an integer that uses `DF_COLUMN_WIDTH_ESTIMATE` as the width for any column
+* `RulesetWithAlgorithmTypeMapping` - Derived Column - Generate several columns:
+  * `output_row` - always contains `1` (used later for Aggregate and Join operations)
+  * `adf_type_conversion` - contains a string like `<column_name> as <adf_type>`
+  * `column_width_estimate` - contains an integer that uses `DF_COLUMN_WIDTH_ESTIMATE` as the width for any column
     where `identified_column_max_length` is not positive, and `identified_column_max_length` plus some padding otherwise
-* `[P]` Aggregate - `GenerateMaskParameters` - Grouped by `output_row` produce the following aggregates
+* `GenerateMaskParameters` - Aggregate - Grouped by `output_row` produce the following aggregates
   * `FieldAlgorithmAssignments` - a JSON string that maps a column name to its assigned algorithm
   * `ColumnsToMask` - a list of the column names that have an algorithm assigned
   * `DataFactoryTypeMapping` - a string that can be used by ADF to parse the output of a call to the Delphix masking
@@ -68,7 +123,25 @@ and the translation of that type to an ADF type
     as specified in the ruleset table, and the sum of `column_width_estimate` column derived previously
   * `TrimLengths` - a list of the actual widths of the columns so that will be used by the masking data flow to trim
     output before sinking
-* `[Q]` Derived Column - `ModifyNumberOfBatches` - Modifies the number of batches to be at least `1`
-* `[R]` Join - `AllMaskingParameters` - Perform an inner join on `output_row` with the output of
-  `RemoveUnnecessaryColumns` - combining all computed masking parameters into the same output stream
-* `[S]` Sink - `MaskingParameterOutput` - Sink results of computing masking parameters to activity output cache
+* `ModifyNumberOfBatches` - Derived Column - Modifies the number of batches to be at least `1`
+* `AllMaskingParameters` - Join - Perform an inner join on `output_row` with the output of
+  `ComputeCastingDefaultsIfMissing` - Derived Column - combining all computed masking parameters into the same output
+  stream
+* `MaskingParameterOutput` - Sink - Sink results of computing masking parameters to activity output cache
+
+
+### ADLS Delimited Modifications
+As ADLS Delimited files have no type information, everything is considered a `string`, and therefore casting it to a
+string is unnecessary. For this reason, the string casting computations are missing, including the following steps:
+* `StringCastingHandling`
+* `FilterToRowsWithStringCasting`
+* `CreateColumnsToCastAsStrings`
+* `CreateColumnsToCastBackParameters`
+* `AggregateColumnsToCastBackParameters`
+* `StringCastingWithAdfType`
+* `CreateColumnsToCastBackTo`
+* `CreateColumnsToCastBackParameters`
+* `AggregateColumnsToCastBackToParameters`
+* `CombineAllStringCastingParameters`
+* `JoinDateAndStringCastingParameters`
+* `ComputeCastingDefaultsIfMissing`

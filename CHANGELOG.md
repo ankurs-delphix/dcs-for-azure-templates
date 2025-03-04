@@ -1,5 +1,54 @@
 # CHANGELOG
 
+# 0.0.19
+* Add support for AzureSQL Managed Instances (MI) to AzureSQL MI Discovery and Masking Pipelines
+
+# 0.0.18
+* Fix a bug in `dcsazure_AzureSQL_to_AzureSQL_mask_pl` that causes the Create Constraints pipeline to fail when the metadata store schema is not present in the sink database.
+
+# 0.0.17
+* Support casting columns to strings and back in masking pipelines
+  * Supports casting from source data type to String and then back to the following ADF types:
+    Binary, Boolean, Date, Double, Float, Integer, Long, and Timestamp
+  * Added to the following pipelines:
+    * `dcsazure_ADLS_to_ADLS_parquet_mask_pl`
+    * `dcsazure_AzureSQL_to_AzureSQL_mask_pl`
+    * `dcsazure_Databricks_to_Databricks_mask_pl`
+    * `dcsazure_Snowflake_to_Snowflake_mask_pl`
+  * Note: this support is not added to `dcsazure_ADLS_to_ADLS_parquet_mask_pl` because all underlying types are string
+* Separate algorithm metadata and source metadata to reduce errors when modifying masking configurations
+  * A new column, `algorithm_metadata` has been added
+  * Migrate previously set algorithm configurations to the `algorithm_metadata` column from the `metadata` column, this
+    includes `date_format`, `key_column`, and `conditions`
+  * Rename `metadata` column to `source_metadata`
+* Allow multi-line input in ADLS to ADLS delimited files for discovery masking and copying
+* Address #32
+* Address #33
+
+# 0.0.16
+* Fix a bug in `dcsazure_AzureSQL_to_AzureSQL_mask_pl` that causes the pipeline to fail when the metadata store schema
+  is not present in the sink database.
+
+# 0.0.15
+* Add support for ADLS to ADLS Parquet discovery and masking pipelines
+* Update existing ADLS to ADLS discovery and masking pipelines to differentiate between new pipeline and existing
+  pipeline with focus on delimited files - including changing current references to `ADLS` to `ADLS-DELIMITED`
+* Update stored procedures for parsing metadata output to take the dataset as an argument and remove hard-coded
+  references to datasets in ADLS pipelines
+
+# 0.0.14
+* Add support for DCS for Azure SQL to Azure SQL Discovery Pipeline
+* Add support for DCS for Azure SQL to Azure SQL Masking Pipeline
+
+# 0.0.13
+* Remove support for Snowflake (Legacy) connectors
+
+# 0.0.12
+* Add support for checkpointing and error handling to all pipelines
+* Rename `profiling` components to `discovery` to be consistent with industry-standard terminology
+* Add feature to `dcsazure_adls_to_adls_discovery_pl` to support profiling files in directories with a large number of
+  files
+
 # 0.0.11
 * Add support for conditional masking to the following pipelines:
   * `dcsazure_adls_to_adls_mask_pl`

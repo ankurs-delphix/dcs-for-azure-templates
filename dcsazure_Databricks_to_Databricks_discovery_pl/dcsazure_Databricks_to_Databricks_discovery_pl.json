@@ -1,0 +1,1692 @@
+{
+  "$schema": "http://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "factoryName": {
+      "type": "string",
+      "metadata": "Data Factory name"
+    },
+    "AzureDataLakeStorage_Staging": {
+      "type": "string"
+    },
+    "Metadata Datastore": {
+      "type": "string"
+    },
+    "AzureDatabricksDeltaLake_Source": {
+      "type": "string"
+    },
+    "AzureDataLakeStorage_Source": {
+      "type": "string"
+    },
+    "DCSForAzureProd": {
+      "type": "string"
+    }
+  },
+  "variables": {
+    "factoryId": "[concat('Microsoft.DataFactory/factories/', parameters('factoryName'))]"
+  },
+  "resources": [
+    {
+      "name": "[concat(parameters('factoryName'), '/dcsazure_Databricks_to_Databricks_discovery_pl')]",
+      "type": "Microsoft.DataFactory/factories/pipelines",
+      "apiVersion": "2018-06-01",
+      "properties": {
+        "activities": [
+          {
+            "name": "Schema Discovery From Databricks",
+            "description": "Discover all tables with DELTA data source format in the specified catalog (database) and schema.",
+            "type": "Copy",
+            "dependsOn": [
+              {
+                "activity": "Check If We Should Rediscover Data",
+                "dependencyConditions": [
+                  "Succeeded"
+                ]
+              }
+            ],
+            "policy": {
+              "timeout": "0.12:00:00",
+              "retry": 0,
+              "retryIntervalInSeconds": 30,
+              "secureOutput": false,
+              "secureInput": false
+            },
+            "userProperties": [],
+            "typeProperties": {
+              "source": {
+                "type": "AzureDatabricksDeltaLakeSource",
+                "query": {
+                  "value": "SELECT\n  '@{variables('DATASET')}' AS dataset,\n  t.TABLE_CATALOG AS specified_database,\n  t.TABLE_SCHEMA AS specified_schema,\n  t.TABLE_NAME AS identified_table,\n  c.COLUMN_NAME AS identified_column,\n  c.DATA_TYPE AS identified_column_type,\n  CASE\n    WHEN c.FULL_DATA_TYPE LIKE 'varchar%' THEN substring(c.FULL_DATA_TYPE,9, POSITION(')' IN c.FULL_DATA_TYPE) - POSITION('(' IN c.FULL_DATA_TYPE) -1) \n    WHEN c.FULL_DATA_TYPE = 'string' THEN 500\n    ELSE -1\n  END AS identified_column_max_length,\n  c.ORDINAL_POSITION AS ordinal_position\nFROM\n  @{pipeline().parameters.P_SOURCE_CATALOG}.INFORMATION_SCHEMA.TABLES t\n  JOIN @{pipeline().parameters.P_SOURCE_CATALOG}.INFORMATION_SCHEMA.COLUMNS c\n    ON t.table_catalog = c.table_catalog AND t.table_schema = c.table_schema AND t.table_name = c.table_name\nWHERE\n  t.table_catalog = '@{pipeline().parameters.P_SOURCE_CATALOG}' AND t.table_schema = '@{pipeline().parameters.P_SOURCE_SCHEMA}' AND t.data_source_format = 'DELTA';",
+                  "type": "Expression"
+                },
+                "exportSettings": {
+                  "type": "AzureDatabricksDeltaLakeExportCommand"
+                }
+              },
+              "sink": {
+                "type": "AzureSqlSink",
+                "writeBehavior": "upsert",
+                "upsertSettings": {
+                  "useTempDB": true,
+                  "keys": [
+                    "dataset",
+                    "specified_database",
+                    "specified_schema",
+                    "identified_table",
+                    "identified_column"
+                  ]
+                },
+                "sqlWriterUseTableLock": false,
+                "disableMetricsCollection": false
+              },
+              "enableStaging": true,
+              "stagingSettings": {
+                "linkedServiceName": {
+                  "referenceName": "[parameters('AzureDataLakeStorage_Staging')]",
+                  "type": "LinkedServiceReference"
+                },
+                "path": {
+                  "value": "@variables('STAGING_STORAGE_PATH')",
+                  "type": "Expression"
+                }
+              },
+              "translator": {
+                "type": "TabularTranslator",
+                "mappings": [
+                  {
+                    "source": {
+                      "name": "dataset",
+                      "type": "String"
+                    },
+                    "sink": {
+                      "name": "dataset",
+                      "type": "String"
+                    }
+                  },
+                  {
+                    "source": {
+                      "name": "specified_database",
+                      "type": "String"
+                    },
+                    "sink": {
+                      "name": "specified_database",
+                      "type": "String"
+                    }
+                  },
+                  {
+                    "source": {
+                      "name": "specified_schema",
+                      "type": "String"
+                    },
+                    "sink": {
+                      "name": "specified_schema",
+                      "type": "String"
+                    }
+                  },
+                  {
+                    "source": {
+                      "name": "identified_table",
+                      "type": "String"
+                    },
+                    "sink": {
+                      "name": "identified_table",
+                      "type": "String"
+                    }
+                  },
+                  {
+                    "source": {
+                      "name": "identified_column",
+                      "type": "String"
+                    },
+                    "sink": {
+                      "name": "identified_column",
+                      "type": "String"
+                    }
+                  },
+                  {
+                    "source": {
+                      "name": "identified_column_type",
+                      "type": "String"
+                    },
+                    "sink": {
+                      "name": "identified_column_type",
+                      "type": "String"
+                    }
+                  },
+                  {
+                    "source": {
+                      "name": "identified_column_max_length",
+                      "type": "String"
+                    },
+                    "sink": {
+                      "name": "identified_column_max_length",
+                      "type": "Int32"
+                    }
+                  },
+                  {
+                    "source": {
+                      "name": "ordinal_position",
+                      "type": "Int"
+                    },
+                    "sink": {
+                      "name": "ordinal_position",
+                      "type": "Int32"
+                    }
+                  }
+                ]
+              }
+            },
+            "inputs": [
+              {
+                "referenceName": "dcsazure_Databricks_to_Databricks_discovery_ds",
+                "type": "DatasetReference",
+                "parameters": {}
+              }
+            ],
+            "outputs": [
+              {
+                "referenceName": "dcsazure_Databricks_to_Databricks_discovery_metadata_ds",
+                "type": "DatasetReference",
+                "parameters": {
+                  "DS_METADATA_SCHEMA": {
+                    "value": "@variables('METADATA_SCHEMA')",
+                    "type": "Expression"
+                  },
+                  "DS_METADATA_TABLE": {
+                    "value": "@variables('METADATA_RULESET_TABLE')",
+                    "type": "Expression"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "name": "Select Discovered Tables",
+            "type": "Lookup",
+            "dependsOn": [
+              {
+                "activity": "Schema Discovery From Databricks",
+                "dependencyConditions": [
+                  "Succeeded"
+                ]
+              }
+            ],
+            "policy": {
+              "timeout": "0.12:00:00",
+              "retry": 0,
+              "retryIntervalInSeconds": 30,
+              "secureOutput": false,
+              "secureInput": false
+            },
+            "userProperties": [],
+            "typeProperties": {
+              "source": {
+                "type": "AzureSqlSource",
+                "sqlReaderQuery": {
+                  "value": "SELECT DISTINCT\n    specified_database,\n    specified_schema,\n    identified_table\nFROM @{variables('METADATA_SCHEMA')}.@{variables('METADATA_RULESET_TABLE')}\nWHERE\ndataset = '@{variables('DATASET')}'\nAND LOWER(specified_schema) = LOWER('@{pipeline().parameters.P_SOURCE_SCHEMA}')\nAND LOWER(specified_database) = LOWER('@{pipeline().parameters.P_SOURCE_CATALOG}')\nAND (discovery_complete IS NULL OR discovery_complete = 0)\nORDER BY identified_table\n",
+                  "type": "Expression"
+                },
+                "queryTimeout": "02:00:00",
+                "partitionOption": "None"
+              },
+              "dataset": {
+                "referenceName": "dcsazure_Databricks_to_Databricks_discovery_metadata_ds",
+                "type": "DatasetReference",
+                "parameters": {
+                  "DS_METADATA_SCHEMA": {
+                    "value": "@variables('METADATA_SCHEMA')",
+                    "type": "Expression"
+                  },
+                  "DS_METADATA_TABLE": {
+                    "value": "@variables('METADATA_RULESET_TABLE')",
+                    "type": "Expression"
+                  }
+                }
+              },
+              "firstRowOnly": false
+            }
+          },
+          {
+            "name": "For Each Discovered Table",
+            "type": "ForEach",
+            "dependsOn": [
+              {
+                "activity": "Select Discovered Tables",
+                "dependencyConditions": [
+                  "Succeeded"
+                ]
+              }
+            ],
+            "userProperties": [],
+            "typeProperties": {
+              "items": {
+                "value": "@activity('Select Discovered Tables').output.value",
+                "type": "Expression"
+              },
+              "activities": [
+                {
+                  "name": "Get Table Row Count",
+                  "type": "Lookup",
+                  "dependsOn": [],
+                  "policy": {
+                    "timeout": "0.12:00:00",
+                    "retry": 0,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                  },
+                  "userProperties": [],
+                  "typeProperties": {
+                    "source": {
+                      "type": "AzureDatabricksDeltaLakeSource",
+                      "query": {
+                        "value": "SELECT COUNT(1) AS row_count FROM @{item().specified_database}.@{item().specified_schema}.@{item().identified_table}",
+                        "type": "Expression"
+                      }
+                    },
+                    "dataset": {
+                      "referenceName": "dcsazure_Databricks_to_Databricks_discovery_ds",
+                      "type": "DatasetReference",
+                      "parameters": {}
+                    }
+                  }
+                },
+                {
+                  "name": "If Table Contains Data",
+                  "type": "IfCondition",
+                  "dependsOn": [
+                    {
+                      "activity": "Get Table Row Count",
+                      "dependencyConditions": [
+                        "Succeeded"
+                      ]
+                    },
+                    {
+                      "activity": "Get Table Metadata",
+                      "dependencyConditions": [
+                        "Succeeded"
+                      ]
+                    }
+                  ],
+                  "userProperties": [],
+                  "typeProperties": {
+                    "expression": {
+                      "value": "@greater(int(activity('Get Table Row Count').output.firstRow.row_count), 0)",
+                      "type": "Expression"
+                    },
+                    "ifFalseActivities": [
+                      {
+                        "name": "Update Undiscoverable Table",
+                        "type": "ExecuteDataFlow",
+                        "dependsOn": [],
+                        "policy": {
+                          "timeout": "0.12:00:00",
+                          "retry": 0,
+                          "retryIntervalInSeconds": 30,
+                          "secureOutput": false,
+                          "secureInput": false
+                        },
+                        "userProperties": [],
+                        "typeProperties": {
+                          "dataflow": {
+                            "referenceName": "dcsazure_Databricks_to_Databricks_no_data_discovery_df",
+                            "type": "DataFlowReference",
+                            "parameters": {
+                              "runId": {
+                                "value": "'@{pipeline().RunId}'",
+                                "type": "Expression"
+                              },
+                              "DF_SOURCE_SCHEMA": {
+                                "value": "'@{pipeline().parameters.P_SOURCE_SCHEMA}'",
+                                "type": "Expression"
+                              },
+                              "DF_SOURCE_TABLE": {
+                                "value": "'@{item().identified_table}'",
+                                "type": "Expression"
+                              },
+                              "DF_METADATA_SCHEMA": {
+                                "value": "'@{variables('METADATA_SCHEMA')}'",
+                                "type": "Expression"
+                              },
+                              "DF_METADATA_RULESET_TABLE": {
+                                "value": "'@{variables('METADATA_RULESET_TABLE')}'",
+                                "type": "Expression"
+                              },
+                              "DF_SOURCE_CATALOG": {
+                                "value": "'@{pipeline().parameters.P_SOURCE_CATALOG}'",
+                                "type": "Expression"
+                              },
+                              "DF_METADATA": {
+                                "value": "'@{json(activity('Get Table Metadata').output.firstRow.source_metadata)}'",
+                                "type": "Expression"
+                              },
+                              "DF_DATASET": {
+                                "value": "'@{variables('DATASET')}'",
+                                "type": "Expression"
+                              }
+                            },
+                            "datasetParameters": {
+                              "Ruleset": {},
+                              "WriteToMetadataStore": {}
+                            }
+                          },
+                          "staging": {},
+                          "compute": {
+                            "coreCount": 8,
+                            "computeType": "General"
+                          },
+                          "traceLevel": "Fine"
+                        }
+                      },
+                      {
+                        "name": "Fail After Updating Discovery State Undiscoverable",
+                        "type": "Fail",
+                        "dependsOn": [
+                          {
+                            "activity": "Update Discovery State Undiscoverable_copy1",
+                            "dependencyConditions": [
+                              "Failed"
+                            ]
+                          }
+                        ],
+                        "userProperties": [],
+                        "typeProperties": {
+                          "message": {
+                            "value": "Failed to discover @{item().identified_table}",
+                            "type": "Expression"
+                          },
+                          "errorCode": "500"
+                        }
+                      },
+                      {
+                        "name": "Update Discovery State Undiscoverable",
+                        "type": "SqlServerStoredProcedure",
+                        "dependsOn": [
+                          {
+                            "activity": "Update Undiscoverable Table",
+                            "dependencyConditions": [
+                              "Succeeded"
+                            ]
+                          }
+                        ],
+                        "policy": {
+                          "timeout": "0.12:00:00",
+                          "retry": 0,
+                          "retryIntervalInSeconds": 30,
+                          "secureOutput": false,
+                          "secureInput": false
+                        },
+                        "userProperties": [],
+                        "typeProperties": {
+                          "storedProcedureName": {
+                            "value": "@{variables('METADATA_SCHEMA')}.@{variables('METADATA_EVENT_PROCEDURE_NAME')}",
+                            "type": "Expression"
+                          },
+                          "storedProcedureParameters": {
+                            "activity_run_id": {
+                              "value": {
+                                "value": "@activity('Update Undiscoverable Table').ActivityRunId",
+                                "type": "Expression"
+                              },
+                              "type": "Guid"
+                            },
+                            "error_message": {
+                              "value": null,
+                              "type": "String"
+                            },
+                            "execution_end_time": {
+                              "value": {
+                                "value": "@activity('Update Undiscoverable Table').ExecutionEndTime",
+                                "type": "Expression"
+                              },
+                              "type": "DateTimeOffset"
+                            },
+                            "execution_start_time": {
+                              "value": {
+                                "value": "@activity('Update Undiscoverable Table').ExecutionStartTime",
+                                "type": "Expression"
+                              },
+                              "type": "DateTimeOffset"
+                            },
+                            "input_parameters": {
+                              "value": "",
+                              "type": "String"
+                            },
+                            "pipeline_name": {
+                              "value": {
+                                "value": "@pipeline().Pipeline",
+                                "type": "Expression"
+                              },
+                              "type": "String"
+                            },
+                            "pipeline_run_id": {
+                              "value": {
+                                "value": "@pipeline().RunId",
+                                "type": "Expression"
+                              },
+                              "type": "Guid"
+                            },
+                            "pipeline_success": {
+                              "value": {
+                                "value": "@if(variables('MARK_EMPTY_TABLES_UNDISCOVERED'),false, true)",
+                                "type": "Expression"
+                              },
+                              "type": "Boolean"
+                            },
+                            "source_database": {
+                              "value": {
+                                "value": "@item().specified_database",
+                                "type": "Expression"
+                              },
+                              "type": "String"
+                            },
+                            "source_dataset": {
+                              "value": {
+                                "value": "@variables('DATASET')",
+                                "type": "Expression"
+                              },
+                              "type": "String"
+                            },
+                            "source_metadata": {
+                              "value": {
+                                "value": "@activity('Get Table Metadata').output.firstRow.source_metadata",
+                                "type": "Expression"
+                              },
+                              "type": "String"
+                            },
+                            "source_schema": {
+                              "value": {
+                                "value": "@item().specified_schema",
+                                "type": "Expression"
+                              },
+                              "type": "String"
+                            },
+                            "source_table": {
+                              "value": {
+                                "value": "@item().identified_table",
+                                "type": "Expression"
+                              },
+                              "type": "String"
+                            }
+                          }
+                        },
+                        "linkedServiceName": {
+                          "referenceName": "[parameters('Metadata Datastore')]",
+                          "type": "LinkedServiceReference"
+                        }
+                      },
+                      {
+                        "name": "Update Discovery State Undiscoverable_copy1",
+                        "type": "SqlServerStoredProcedure",
+                        "dependsOn": [
+                          {
+                            "activity": "Update Undiscoverable Table",
+                            "dependencyConditions": [
+                              "Failed"
+                            ]
+                          }
+                        ],
+                        "policy": {
+                          "timeout": "0.12:00:00",
+                          "retry": 0,
+                          "retryIntervalInSeconds": 30,
+                          "secureOutput": false,
+                          "secureInput": false
+                        },
+                        "userProperties": [],
+                        "typeProperties": {
+                          "storedProcedureName": {
+                            "value": "@{variables('METADATA_SCHEMA')}.@{variables('METADATA_EVENT_PROCEDURE_NAME')}",
+                            "type": "Expression"
+                          },
+                          "storedProcedureParameters": {
+                            "activity_run_id": {
+                              "value": {
+                                "value": "@activity('Update Undiscoverable Table').ActivityRunId",
+                                "type": "Expression"
+                              },
+                              "type": "Guid"
+                            },
+                            "error_message": {
+                              "value": {
+                                "value": "@activity('Update Undiscoverable Table').Error.message",
+                                "type": "Expression"
+                              },
+                              "type": "String"
+                            },
+                            "execution_end_time": {
+                              "value": {
+                                "value": "@activity('Update Undiscoverable Table').ExecutionEndTime",
+                                "type": "Expression"
+                              },
+                              "type": "DateTimeOffset"
+                            },
+                            "execution_start_time": {
+                              "value": {
+                                "value": "@activity('Update Undiscoverable Table').ExecutionStartTime",
+                                "type": "Expression"
+                              },
+                              "type": "DateTimeOffset"
+                            },
+                            "input_parameters": {
+                              "value": "",
+                              "type": "String"
+                            },
+                            "pipeline_name": {
+                              "value": {
+                                "value": "@pipeline().Pipeline",
+                                "type": "Expression"
+                              },
+                              "type": "String"
+                            },
+                            "pipeline_run_id": {
+                              "value": {
+                                "value": "@pipeline().RunId",
+                                "type": "Expression"
+                              },
+                              "type": "Guid"
+                            },
+                            "pipeline_success": {
+                              "value": "false",
+                              "type": "Boolean"
+                            },
+                            "source_database": {
+                              "value": {
+                                "value": "@item().specified_database",
+                                "type": "Expression"
+                              },
+                              "type": "String"
+                            },
+                            "source_dataset": {
+                              "value": {
+                                "value": "@variables('DATASET')",
+                                "type": "Expression"
+                              },
+                              "type": "String"
+                            },
+                            "source_metadata": {
+                              "value": {
+                                "value": "@activity('Get Table Metadata').output.firstRow.source_metadata",
+                                "type": "Expression"
+                              },
+                              "type": "String"
+                            },
+                            "source_schema": {
+                              "value": {
+                                "value": "@item().specified_schema",
+                                "type": "Expression"
+                              },
+                              "type": "String"
+                            },
+                            "source_table": {
+                              "value": {
+                                "value": "@item().identified_table",
+                                "type": "Expression"
+                              },
+                              "type": "String"
+                            }
+                          }
+                        },
+                        "linkedServiceName": {
+                          "referenceName": "[parameters('Metadata Datastore')]",
+                          "type": "LinkedServiceReference"
+                        }
+                      }
+                    ],
+                    "ifTrueActivities": [
+                      {
+                        "name": "Discover Sensitive Data",
+                        "type": "ExecuteDataFlow",
+                        "dependsOn": [],
+                        "policy": {
+                          "timeout": "0.12:00:00",
+                          "retry": 0,
+                          "retryIntervalInSeconds": 30,
+                          "secureOutput": false,
+                          "secureInput": false
+                        },
+                        "userProperties": [],
+                        "typeProperties": {
+                          "dataflow": {
+                            "referenceName": "dcsazure_Databricks_to_Databricks_data_discovery_df",
+                            "type": "DataFlowReference",
+                            "parameters": {
+                              "runId": {
+                                "value": "'@{pipeline().RunId}'",
+                                "type": "Expression"
+                              },
+                              "DF_SOURCE_CONTAINER": {
+                                "value": "'@{json(activity('Get Table Metadata').output.firstRow.source_metadata).container_name}'",
+                                "type": "Expression"
+                              },
+                              "DF_SOURCE_DELTAPATH": {
+                                "value": "'@{json(activity('Get Table Metadata').output.firstRow.source_metadata).table_location\n\n}'",
+                                "type": "Expression"
+                              },
+                              "DF_NUM_ROWS_TO_PROFILE": {
+                                "value": "@variables('NUMBER_OF_ROWS_TO_PROFILE')",
+                                "type": "Expression"
+                              },
+                              "DF_METADATA_SCHEMA": {
+                                "value": "'@{variables('METADATA_SCHEMA')}'",
+                                "type": "Expression"
+                              },
+                              "DF_METADATA_RULESET_TABLE": {
+                                "value": "'@{variables('METADATA_RULESET_TABLE')}'",
+                                "type": "Expression"
+                              },
+                              "DF_SOURCE_DB": {
+                                "value": "'@{item().specified_database}'",
+                                "type": "Expression"
+                              },
+                              "DF_TABLE_ROW_COUNT": {
+                                "value": "@activity('Get Table Row Count').output.firstRow.row_count",
+                                "type": "Expression"
+                              },
+                              "DF_SOURCE_TABLE": {
+                                "value": "'@{item().identified_table}'",
+                                "type": "Expression"
+                              },
+                              "DF_SOURCE_SCHEMA": {
+                                "value": "'@{item().specified_schema}'",
+                                "type": "Expression"
+                              },
+                              "DF_METADATA": {
+                                "value": "'@{json(activity('Get Table Metadata').output.firstRow.source_metadata)}'",
+                                "type": "Expression"
+                              },
+                              "DF_DATASET": {
+                                "value": "'@{variables('DATASET')}'",
+                                "type": "Expression"
+                              }
+                            },
+                            "datasetParameters": {
+                              "Source1MillRowDataSampling": {},
+                              "MetadataStoreRead": {},
+                              "WriteToMetadataStore": {}
+                            }
+                          },
+                          "staging": {},
+                          "compute": {
+                            "coreCount": 8,
+                            "computeType": "General"
+                          },
+                          "traceLevel": "None",
+                          "cacheSinks": {
+                            "firstRowOnly": true
+                          }
+                        }
+                      },
+                      {
+                        "name": "Update Discovery State",
+                        "type": "SqlServerStoredProcedure",
+                        "dependsOn": [
+                          {
+                            "activity": "Discover Sensitive Data",
+                            "dependencyConditions": [
+                              "Succeeded"
+                            ]
+                          }
+                        ],
+                        "policy": {
+                          "timeout": "0.12:00:00",
+                          "retry": 0,
+                          "retryIntervalInSeconds": 30,
+                          "secureOutput": false,
+                          "secureInput": false
+                        },
+                        "userProperties": [],
+                        "typeProperties": {
+                          "storedProcedureName": {
+                            "value": "@{variables('METADATA_SCHEMA')}.@{variables('METADATA_EVENT_PROCEDURE_NAME')}",
+                            "type": "Expression"
+                          },
+                          "storedProcedureParameters": {
+                            "activity_run_id": {
+                              "value": {
+                                "value": "@activity('Discover Sensitive Data').ActivityRunId",
+                                "type": "Expression"
+                              },
+                              "type": "Guid"
+                            },
+                            "error_message": {
+                              "value": null,
+                              "type": "String"
+                            },
+                            "execution_end_time": {
+                              "value": {
+                                "value": "@activity('Discover Sensitive Data').ExecutionEndTime",
+                                "type": "Expression"
+                              },
+                              "type": "DateTime"
+                            },
+                            "execution_start_time": {
+                              "value": {
+                                "value": "@activity('Discover Sensitive Data').ExecutionStartTime",
+                                "type": "Expression"
+                              },
+                              "type": "DateTime"
+                            },
+                            "input_parameters": {
+                              "value": {
+                                "value": "{\n    \"DF_SOURCE_CONTAINER\": \"@{json(activity('Get Table Metadata').output.firstRow.source_metadata).container_name}\",\n    \"DF_SOURCE_DELTAPATH\": \"@{json(activity('Get Table Metadata').output.firstRow.source_metadata).table_location}\",\n    \"DF_NUM_ROWS_TO_PROFILE\": @{variables('NUMBER_OF_ROWS_TO_PROFILE')},\n    \"DF_TABLE_ROW_COUNT\": @{activity('Get Table Row Count').output.firstRow.row_count},\n}",
+                                "type": "Expression"
+                              },
+                              "type": "String"
+                            },
+                            "pipeline_name": {
+                              "value": {
+                                "value": "@pipeline().Pipeline",
+                                "type": "Expression"
+                              },
+                              "type": "String"
+                            },
+                            "pipeline_run_id": {
+                              "value": {
+                                "value": "@pipeline().RunId",
+                                "type": "Expression"
+                              },
+                              "type": "Guid"
+                            },
+                            "pipeline_success": {
+                              "value": "true",
+                              "type": "Boolean"
+                            },
+                            "source_database": {
+                              "value": {
+                                "value": "@item().specified_database",
+                                "type": "Expression"
+                              },
+                              "type": "String"
+                            },
+                            "source_dataset": {
+                              "value": {
+                                "value": "@variables('DATASET')",
+                                "type": "Expression"
+                              },
+                              "type": "String"
+                            },
+                            "source_metadata": {
+                              "value": {
+                                "value": "@activity('Get Table Metadata').output.firstRow.source_metadata",
+                                "type": "Expression"
+                              },
+                              "type": "String"
+                            },
+                            "source_schema": {
+                              "value": {
+                                "value": "@item().specified_schema",
+                                "type": "Expression"
+                              },
+                              "type": "String"
+                            },
+                            "source_table": {
+                              "value": {
+                                "value": "@item().identified_table",
+                                "type": "Expression"
+                              },
+                              "type": "String"
+                            }
+                          }
+                        },
+                        "linkedServiceName": {
+                          "referenceName": "[parameters('Metadata Datastore')]",
+                          "type": "LinkedServiceReference"
+                        }
+                      },
+                      {
+                        "name": "Update Discovery State Failed",
+                        "type": "SqlServerStoredProcedure",
+                        "dependsOn": [
+                          {
+                            "activity": "Discover Sensitive Data",
+                            "dependencyConditions": [
+                              "Failed"
+                            ]
+                          }
+                        ],
+                        "policy": {
+                          "timeout": "0.12:00:00",
+                          "retry": 0,
+                          "retryIntervalInSeconds": 30,
+                          "secureOutput": false,
+                          "secureInput": false
+                        },
+                        "userProperties": [],
+                        "typeProperties": {
+                          "storedProcedureName": {
+                            "value": "@{variables('METADATA_SCHEMA')}.@{variables('METADATA_EVENT_PROCEDURE_NAME')}",
+                            "type": "Expression"
+                          },
+                          "storedProcedureParameters": {
+                            "activity_run_id": {
+                              "value": {
+                                "value": "@activity('Discover Sensitive Data').ActivityRunId",
+                                "type": "Expression"
+                              },
+                              "type": "Guid"
+                            },
+                            "error_message": {
+                              "value": {
+                                "value": "@activity('Discover Sensitive Data').Error.message",
+                                "type": "Expression"
+                              },
+                              "type": "String"
+                            },
+                            "execution_end_time": {
+                              "value": {
+                                "value": "@activity('Discover Sensitive Data').ExecutionEndTime",
+                                "type": "Expression"
+                              },
+                              "type": "DateTime"
+                            },
+                            "execution_start_time": {
+                              "value": {
+                                "value": "@activity('Discover Sensitive Data').ExecutionStartTime",
+                                "type": "Expression"
+                              },
+                              "type": "DateTime"
+                            },
+                            "input_parameters": {
+                              "value": {
+                                "value": "{\n    \"DF_SOURCE_CONTAINER\": \"@{json(activity('Get Table Metadata').output.firstRow.source_metadata).container_name}\",\n    \"DF_SOURCE_DELTAPATH\": \"@{json(activity('Get Table Metadata').output.firstRow.source_metadata).table_location}\",\n    \"DF_NUM_ROWS_TO_PROFILE\": @{variables('NUMBER_OF_ROWS_TO_PROFILE')},\n    \"DF_TABLE_ROW_COUNT\": @{activity('Get Table Row Count').output.firstRow.row_count},\n}",
+                                "type": "Expression"
+                              },
+                              "type": "String"
+                            },
+                            "pipeline_name": {
+                              "value": {
+                                "value": "@pipeline().Pipeline",
+                                "type": "Expression"
+                              },
+                              "type": "String"
+                            },
+                            "pipeline_run_id": {
+                              "value": {
+                                "value": "@pipeline().RunId",
+                                "type": "Expression"
+                              },
+                              "type": "Guid"
+                            },
+                            "pipeline_success": {
+                              "value": "false",
+                              "type": "Boolean"
+                            },
+                            "source_database": {
+                              "value": {
+                                "value": "@item().specified_database",
+                                "type": "Expression"
+                              },
+                              "type": "String"
+                            },
+                            "source_dataset": {
+                              "value": {
+                                "value": "@variables('DATASET')",
+                                "type": "Expression"
+                              },
+                              "type": "String"
+                            },
+                            "source_metadata": {
+                              "value": {
+                                "value": "@activity('Get Table Metadata').output.firstRow.source_metadata",
+                                "type": "Expression"
+                              },
+                              "type": "String"
+                            },
+                            "source_schema": {
+                              "value": {
+                                "value": "@item().specified_schema",
+                                "type": "Expression"
+                              },
+                              "type": "String"
+                            },
+                            "source_table": {
+                              "value": {
+                                "value": "@item().identified_table",
+                                "type": "Expression"
+                              },
+                              "type": "String"
+                            }
+                          }
+                        },
+                        "linkedServiceName": {
+                          "referenceName": "[parameters('Metadata Datastore')]",
+                          "type": "LinkedServiceReference"
+                        }
+                      },
+                      {
+                        "name": "Fail After Updating Discovery State",
+                        "type": "Fail",
+                        "dependsOn": [
+                          {
+                            "activity": "Update Discovery State Failed",
+                            "dependencyConditions": [
+                              "Succeeded"
+                            ]
+                          }
+                        ],
+                        "userProperties": [],
+                        "typeProperties": {
+                          "message": {
+                            "value": "Failed to discover @{item().identified_table}",
+                            "type": "Expression"
+                          },
+                          "errorCode": "500"
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "name": "Get Table Details",
+                  "type": "Lookup",
+                  "dependsOn": [],
+                  "policy": {
+                    "timeout": "0.12:00:00",
+                    "retry": 0,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                  },
+                  "userProperties": [],
+                  "typeProperties": {
+                    "source": {
+                      "type": "AzureDatabricksDeltaLakeSource",
+                      "query": {
+                        "value": "DESCRIBE DETAIL @{item().specified_database}.@{item().specified_schema}.@{item().identified_table}",
+                        "type": "Expression"
+                      }
+                    },
+                    "dataset": {
+                      "referenceName": "dcsazure_Databricks_to_Databricks_discovery_ds",
+                      "type": "DatasetReference",
+                      "parameters": {}
+                    }
+                  }
+                },
+                {
+                  "name": "Get Table Metadata",
+                  "type": "Lookup",
+                  "dependsOn": [
+                    {
+                      "activity": "Get Table Details",
+                      "dependencyConditions": [
+                        "Succeeded"
+                      ]
+                    }
+                  ],
+                  "policy": {
+                    "timeout": "0.12:00:00",
+                    "retry": 0,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                  },
+                  "userProperties": [],
+                  "typeProperties": {
+                    "source": {
+                      "type": "AzureSqlSource",
+                      "sqlReaderQuery": {
+                        "value": "SELECT JSON_OBJECT(\n'metadata_version': 2,\n'minReaderVersion': @{activity('Get Table Details').output.firstRow.minReaderVersion},\n'container_name': SUBSTRING('@{activity('Get Table Details').output.firstRow.location}', 9, CHARINDEX('@','@{activity('Get Table Details').output.firstRow.location}')-9),\n'table_location': SUBSTRING('@{activity('Get Table Details').output.firstRow.location}',  CHARINDEX('__unitystorage/','@{activity('Get Table Details').output.firstRow.location}'), len('@{activity('Get Table Details').output.firstRow.location}'))\n) as source_metadata;",
+                        "type": "Expression"
+                      },
+                      "queryTimeout": "02:00:00",
+                      "partitionOption": "None"
+                    },
+                    "dataset": {
+                      "referenceName": "dcsazure_Databricks_to_Databricks_discovery_metadata_ds",
+                      "type": "DatasetReference",
+                      "parameters": {
+                        "DS_METADATA_SCHEMA": {
+                          "value": "@variables('METADATA_SCHEMA')",
+                          "type": "Expression"
+                        },
+                        "DS_METADATA_TABLE": {
+                          "value": "@variables('METADATA_RULESET_TABLE')",
+                          "type": "Expression"
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "Check If We Should Rediscover Data",
+            "type": "IfCondition",
+            "dependsOn": [],
+            "userProperties": [],
+            "typeProperties": {
+              "expression": {
+                "value": "@pipeline().parameters.P_REDISCOVER",
+                "type": "Expression"
+              },
+              "ifTrueActivities": [
+                {
+                  "name": "Mark Tables Undiscovered",
+                  "description": "Mark all tables in this database and schema as undiscovered so that we can re-discover sensitive data in them",
+                  "type": "Script",
+                  "dependsOn": [],
+                  "policy": {
+                    "timeout": "0.12:00:00",
+                    "retry": 0,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                  },
+                  "userProperties": [],
+                  "linkedServiceName": {
+                    "referenceName": "[parameters('Metadata Datastore')]",
+                    "type": "LinkedServiceReference"
+                  },
+                  "typeProperties": {
+                    "scripts": [
+                      {
+                        "type": "Query",
+                        "text": {
+                          "value": "UPDATE @{variables('METADATA_SCHEMA')}.@{variables('METADATA_RULESET_TABLE')}\nSET discovery_complete = CAST(0 AS BIT)\nWHERE\n    dataset = '@{variables('DATASET')}'\n    AND specified_database = '@{pipeline().parameters.P_SOURCE_CATALOG}'\n    AND specified_schema = '@{pipeline().parameters.P_SOURCE_SCHEMA}'",
+                          "type": "Expression"
+                        }
+                      }
+                    ],
+                    "scriptBlockExecutionTimeout": "02:00:00"
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "policy": {
+          "elapsedTimeMetric": {}
+        },
+        "parameters": {
+          "P_SOURCE_CATALOG": {
+            "type": "string"
+          },
+          "P_SOURCE_SCHEMA": {
+            "type": "string"
+          },
+          "P_REDISCOVER": {
+            "type": "bool",
+            "defaultValue": true
+          }
+        },
+        "variables": {
+          "METADATA_SCHEMA": {
+            "type": "String",
+            "defaultValue": "dbo"
+          },
+          "METADATA_RULESET_TABLE": {
+            "type": "String",
+            "defaultValue": "discovered_ruleset"
+          },
+          "STAGING_STORAGE_PATH": {
+            "type": "String",
+            "defaultValue": "staging-container"
+          },
+          "DATASET": {
+            "type": "String",
+            "defaultValue": "DATABRICKS"
+          },
+          "METADATA_EVENT_PROCEDURE_NAME": {
+            "type": "String",
+            "defaultValue": "insert_adf_discovery_event"
+          },
+          "NUMBER_OF_ROWS_TO_PROFILE": {
+            "type": "Integer",
+            "defaultValue": 1000
+          },
+          "MARK_EMPTY_TABLES_UNDISCOVERED": {
+            "type": "Boolean",
+            "defaultValue": true
+          }
+        },
+        "folder": {
+          "name": "dcsazure_Databricks_to_Databricks"
+        },
+        "annotations": [],
+        "lastPublishTime": "2025-01-15T00:23:45Z"
+      },
+      "dependsOn": [
+        "[concat(variables('factoryId'), '/datasets/dcsazure_Databricks_to_Databricks_discovery_ds')]",
+        "[concat(variables('factoryId'), '/datasets/dcsazure_Databricks_to_Databricks_discovery_metadata_ds')]",
+        "[concat(variables('factoryId'), '/dataflows/dcsazure_Databricks_to_Databricks_no_data_discovery_df')]",
+        "[concat(variables('factoryId'), '/dataflows/dcsazure_Databricks_to_Databricks_data_discovery_df')]"
+      ]
+    },
+    {
+      "name": "[concat(parameters('factoryName'), '/dcsazure_Databricks_to_Databricks_discovery_ds')]",
+      "type": "Microsoft.DataFactory/factories/datasets",
+      "apiVersion": "2018-06-01",
+      "properties": {
+        "linkedServiceName": {
+          "referenceName": "[parameters('AzureDatabricksDeltaLake_Source')]",
+          "type": "LinkedServiceReference"
+        },
+        "folder": {
+          "name": "dcsazure_Databricks_to_Databricks"
+        },
+        "annotations": [],
+        "type": "AzureDatabricksDeltaLakeDataset",
+        "typeProperties": {},
+        "schema": []
+      },
+      "dependsOn": []
+    },
+    {
+      "name": "[concat(parameters('factoryName'), '/dcsazure_Databricks_to_Databricks_discovery_metadata_ds')]",
+      "type": "Microsoft.DataFactory/factories/datasets",
+      "apiVersion": "2018-06-01",
+      "properties": {
+        "linkedServiceName": {
+          "referenceName": "[parameters('Metadata Datastore')]",
+          "type": "LinkedServiceReference"
+        },
+        "parameters": {
+          "DS_METADATA_SCHEMA": {
+            "type": "string"
+          },
+          "DS_METADATA_TABLE": {
+            "type": "string"
+          }
+        },
+        "folder": {
+          "name": "dcsazure_Databricks_to_Databricks"
+        },
+        "annotations": [],
+        "type": "AzureSqlTable",
+        "schema": [
+          {
+            "name": "source_database",
+            "type": "varchar"
+          },
+          {
+            "name": "source_schema",
+            "type": "varchar"
+          },
+          {
+            "name": "source_table",
+            "type": "varchar"
+          },
+          {
+            "name": "source_column",
+            "type": "varchar"
+          },
+          {
+            "name": "destination_database",
+            "type": "varchar"
+          },
+          {
+            "name": "destination_schema",
+            "type": "varchar"
+          },
+          {
+            "name": "destination_table",
+            "type": "varchar"
+          }
+        ],
+        "typeProperties": {
+          "schema": {
+            "value": "@dataset().DS_METADATA_SCHEMA",
+            "type": "Expression"
+          },
+          "table": {
+            "value": "@dataset().DS_METADATA_TABLE",
+            "type": "Expression"
+          }
+        }
+      },
+      "dependsOn": []
+    },
+    {
+      "name": "[concat(parameters('factoryName'), '/dcsazure_Databricks_to_Databricks_no_data_discovery_df')]",
+      "type": "Microsoft.DataFactory/factories/dataflows",
+      "apiVersion": "2018-06-01",
+      "properties": {
+        "folder": {
+          "name": "dcsazure_Databricks_to_Databricks"
+        },
+        "type": "MappingDataFlow",
+        "typeProperties": {
+          "sources": [
+            {
+              "linkedService": {
+                "referenceName": "[parameters('Metadata Datastore')]",
+                "type": "LinkedServiceReference"
+              },
+              "name": "Ruleset",
+              "description": "Get the ruleset table from the metadata store at DF_METADATA_SCHEMA.DF_METADATA_RULESET_TABLE"
+            }
+          ],
+          "sinks": [
+            {
+              "linkedService": {
+                "referenceName": "[parameters('Metadata Datastore')]",
+                "type": "LinkedServiceReference"
+              },
+              "name": "WriteToMetadataStore",
+              "description": "Sink results to metadata data store by sinking the derived metadata and row count columns to the appropriate columns in the metadata store"
+            }
+          ],
+          "transformations": [
+            {
+              "name": "FilterRowsToUpdate",
+              "description": "Filter ruleset table down to the table in question by specifying dataset, specified_database, specified_schema, and identified_table - making sure they match the dataset associated with each version of the dataflow, DF_SOURCE_DATABASE, DF_SOURCE_SCHEMA, DF_SOURCE_TABLE, and not empty or null (respectively). This filters the ruleset down to only the information about this particular table"
+            },
+            {
+              "name": "ChecksBeforeSave",
+              "description": "Alter rows using Update if (only update rows that need updating)"
+            },
+            {
+              "name": "UpdateProfiledColumns",
+              "description": "Updating the columns row_count, metadata, and last_profiled_updated_timestamp"
+            }
+          ],
+          "scriptLines": [
+            "parameters{",
+            "     runId as string (''),",
+            "     DF_SOURCE_SCHEMA as string (''),",
+            "     DF_SOURCE_TABLE as string (''),",
+            "     DF_METADATA_SCHEMA as string ('dbo'),",
+            "     DF_METADATA_RULESET_TABLE as string ('discovered_ruleset'),",
+            "     DF_SOURCE_CATALOG as string (''),",
+            "     DF_METADATA as string (''),",
+            "     DF_DATASET as string ('DATABRICKS')",
+            "}",
+            "source(output(",
+            "          dataset as string,",
+            "          specified_database as string,",
+            "          specified_schema as string,",
+            "          identified_table as string,",
+            "          identified_column as string,",
+            "          identified_column_type as string,",
+            "          identified_column_max_length as integer,",
+            "          ordinal_position as integer,",
+            "          row_count as long,",
+            "          source_metadata as string,",
+            "          profiled_domain as string,",
+            "          profiled_algorithm as string,",
+            "          confidence_score as decimal(6,5),",
+            "          rows_profiled as long,",
+            "          assigned_algorithm as string,",
+            "          last_profiled_updated_timestamp as timestamp,",
+            "          discovery_complete as boolean,",
+            "          latest_event as string,",
+            "          is_profiled as string,",
+            "          last_update_pipeline_id as string,",
+            "          algorithm_metadata as string",
+            "     ),",
+            "     allowSchemaDrift: false,",
+            "     validateSchema: false,",
+            "     format: 'table',",
+            "     store: 'sqlserver',",
+            "     schemaName: ($DF_METADATA_SCHEMA),",
+            "     tableName: ($DF_METADATA_RULESET_TABLE),",
+            "     isolationLevel: 'READ_UNCOMMITTED') ~> Ruleset",
+            "Ruleset filter(equalsIgnoreCase(dataset, $DF_DATASET)",
+            "&& equalsIgnoreCase(specified_database, $DF_SOURCE_CATALOG)",
+            "&& equalsIgnoreCase(specified_schema, $DF_SOURCE_SCHEMA)",
+            "&& equalsIgnoreCase(identified_table, $DF_SOURCE_TABLE)) ~> FilterRowsToUpdate",
+            "UpdateProfiledColumns alterRow(updateIf(true())) ~> ChecksBeforeSave",
+            "FilterRowsToUpdate derive(last_profiled_updated_timestamp = currentTimestamp(),",
+            "          row_count = 0,",
+            "          source_metadata = $DF_METADATA) ~> UpdateProfiledColumns",
+            "ChecksBeforeSave sink(allowSchemaDrift: true,",
+            "     validateSchema: false,",
+            "     input(",
+            "          dataset as string,",
+            "          specified_database as string,",
+            "          specified_schema as string,",
+            "          identified_table as string,",
+            "          identified_column as string,",
+            "          identified_column_type as string,",
+            "          identified_column_max_length as integer,",
+            "          ordinal_position as integer,",
+            "          row_count as long,",
+            "          source_metadata as string,",
+            "          profiled_domain as string,",
+            "          profiled_algorithm as string,",
+            "          confidence_score as decimal(6,5),",
+            "          rows_profiled as long,",
+            "          assigned_algorithm as string,",
+            "          last_profiled_updated_timestamp as timestamp,",
+            "          discovery_complete as boolean,",
+            "          latest_event as string,",
+            "          is_profiled as string,",
+            "          last_update_pipeline_id as string,",
+            "          algorithm_metadata as string",
+            "     ),",
+            "     format: 'table',",
+            "     store: 'sqlserver',",
+            "     schemaName: ($DF_METADATA_SCHEMA),",
+            "     tableName: ($DF_METADATA_RULESET_TABLE),",
+            "     insertable: false,",
+            "     updateable: true,",
+            "     deletable: false,",
+            "     upsertable: false,",
+            "     keys:(array(\"dataset\", \"specified_database\", \"specified_schema\", \"identified_table\", \"identified_column\")),",
+            "     skipKeyWrites:true,",
+            "     skipDuplicateMapInputs: true,",
+            "     skipDuplicateMapOutputs: true,",
+            "     errorHandlingOption: 'stopOnFirstError',",
+            "     mapColumn(",
+            "          dataset,",
+            "          specified_database,",
+            "          specified_schema,",
+            "          identified_table,",
+            "          identified_column,",
+            "          identified_column_type,",
+            "          identified_column_max_length,",
+            "          ordinal_position,",
+            "          row_count,",
+            "          profiled_domain,",
+            "          profiled_algorithm,",
+            "          confidence_score,",
+            "          rows_profiled,",
+            "          assigned_algorithm,",
+            "          last_profiled_updated_timestamp,",
+            "          source_metadata",
+            "     )) ~> WriteToMetadataStore"
+          ]
+        }
+      },
+      "dependsOn": []
+    },
+    {
+      "name": "[concat(parameters('factoryName'), '/dcsazure_Databricks_to_Databricks_data_discovery_df')]",
+      "type": "Microsoft.DataFactory/factories/dataflows",
+      "apiVersion": "2018-06-01",
+      "properties": {
+        "folder": {
+          "name": "dcsazure_Databricks_to_Databricks"
+        },
+        "type": "MappingDataFlow",
+        "typeProperties": {
+          "sources": [
+            {
+              "linkedService": {
+                "referenceName": "[parameters('AzureDataLakeStorage_Source')]",
+                "type": "LinkedServiceReference"
+              },
+              "name": "Source1MillRowDataSampling",
+              "description": "Import the first million rows of unmasked data from the desired source dataset"
+            },
+            {
+              "linkedService": {
+                "referenceName": "[parameters('Metadata Datastore')]",
+                "type": "LinkedServiceReference"
+              },
+              "name": "MetadataStoreRead",
+              "description": "Import data from Metadata Datastore, querying the ruleset table"
+            }
+          ],
+          "sinks": [
+            {
+              "linkedService": {
+                "referenceName": "[parameters('Metadata Datastore')]",
+                "type": "LinkedServiceReference"
+              },
+              "name": "WriteToMetadataStore",
+              "description": "Sink results of profiling to metadata data store by sinking the unrolled results of the profiling call to the appropriate columns in the metadata store"
+            }
+          ],
+          "transformations": [
+            {
+              "name": "CallDCSForAzureProfiling",
+              "linkedService": {
+                "referenceName": "[parameters('DCSForAzureProd')]",
+                "type": "LinkedServiceReference"
+              }
+            },
+            {
+              "name": "CreateRandomIdColumn",
+              "description": "Add a DELPHIX_COMPLIANCE_SERVICE_RANDOM_ID column, which is generated via the random expression. The current timestamp in milliseconds is used as the seed for the number generation"
+            },
+            {
+              "name": "SortByRandomId",
+              "description": "Sort the sample rows based on the randomly generated IDs"
+            },
+            {
+              "name": "CreateFinalSelectionId",
+              "description": "Add a DELPHIX_COMPLIANCE_SERVICE_FINAL_SELECTION_ID column that increments by 1 and starts at 1. It is incremented in order of the DELPHIX_COMPLIANCE_SERVICE_RANDOM_ID added previously, making it so that the surrogate key is in order of the randomly assigned value, creating a shuffled set of rows"
+            },
+            {
+              "name": "GetRandomRows",
+              "description": "Take the first DF_NUM_ROWS_TO_PROFILE from the shuffled row set"
+            },
+            {
+              "name": "CreateItemsList",
+              "description": "For every column that we didn't add collect it to produce a list of values, and encode the column name to avoid reserved characters"
+            },
+            {
+              "name": "ParseAPIResponse",
+              "description": "Parse the API response from profiling call"
+            },
+            {
+              "name": "AssertNoFailures",
+              "description": "Confirm that we received a 200 response status from the API request"
+            },
+            {
+              "name": "FlattenDetails",
+              "description": "Unroll the API response body into columnName, domain, algorithm, confidence, and rowsConsidered"
+            },
+            {
+              "name": "FilterRowsToUpdate",
+              "description": "Filter ruleset table down to the table in question by specifying dataset, specified_database, specified_schema, and identified_table - making sure they match the dataset associated with each version of the dataflow, DF_SOURCE_DATABASE, DF_SOURCE_SCHEMA, and DF_SOURCE_TABLE (respectively). This filters the ruleset down to only the columns that need to be profiled for this particular table"
+            },
+            {
+              "name": "JoinDetailsAndMetadata",
+              "description": "Inner join on FlattenDetails and FilterRowsToUpdate based on matching column names"
+            },
+            {
+              "name": "ChecksBeforeSave",
+              "description": "Alter rows using Update if (only update rows that need updating)"
+            },
+            {
+              "name": "UpdateProfiledColumns",
+              "description": "Updating the columns row_count, metadata, and last_profiled_updated_timestamp"
+            },
+            {
+              "name": "FilterOnlyNewlyProfiledRows",
+              "description": "Filter rows where the profiling results are different from previous dataflow executions (i.e. the profiled_domain, profiled_algorithm, rows_profiled, confidence_score or row_count have changed)"
+            },
+            {
+              "name": "ItemsListWithRenamedColumns",
+              "description": "Decode the encoded column name to restore it to the source column name"
+            },
+            {
+              "name": "DeriveColumnsBasedOnInputParams"
+            }
+          ],
+          "scriptLines": [
+            "parameters{",
+            "     runId as string (''),",
+            "     DF_SOURCE_CONTAINER as string (''),",
+            "     DF_SOURCE_DELTAPATH as string (''),",
+            "     DF_NUM_ROWS_TO_PROFILE as integer (1000),",
+            "     DF_METADATA_SCHEMA as string ('dbo'),",
+            "     DF_METADATA_RULESET_TABLE as string ('discovered_ruleset'),",
+            "     DF_SOURCE_DB as string (''),",
+            "     DF_TABLE_ROW_COUNT as integer (0),",
+            "     DF_SOURCE_TABLE as string (''),",
+            "     DF_SOURCE_SCHEMA as string (''),",
+            "     DF_METADATA as string (''),",
+            "     DF_DATASET as string ('DATABRICKS')",
+            "}",
+            "source(allowSchemaDrift: true,",
+            "     validateSchema: false,",
+            "     limit: 1000000,",
+            "     ignoreNoFilesFound: false,",
+            "     format: 'delta',",
+            "     fileSystem: ($DF_SOURCE_CONTAINER),",
+            "     folderPath: ($DF_SOURCE_DELTAPATH),",
+            "     partitionBy('roundRobin', 32)) ~> Source1MillRowDataSampling",
+            "source(output(",
+            "          dataset as string,",
+            "          specified_database as string,",
+            "          specified_schema as string,",
+            "          identified_table as string,",
+            "          identified_column as string,",
+            "          identified_column_type as string,",
+            "          identified_column_max_length as integer,",
+            "          ordinal_position as integer,",
+            "          row_count as long,",
+            "          source_metadata as string,",
+            "          profiled_domain as string,",
+            "          profiled_algorithm as string,",
+            "          confidence_score as decimal(6,5),",
+            "          rows_profiled as long,",
+            "          assigned_algorithm as string,",
+            "          last_profiled_updated_timestamp as timestamp,",
+            "          discovery_complete as boolean,",
+            "          latest_event as string,",
+            "          is_profiled as string,",
+            "          last_update_pipeline_id as string,",
+            "          algorithm_metadata as string",
+            "     ),",
+            "     allowSchemaDrift: false,",
+            "     validateSchema: false,",
+            "     format: 'table',",
+            "     store: 'sqlserver',",
+            "     schemaName: ($DF_METADATA_SCHEMA),",
+            "     tableName: ($DF_METADATA_RULESET_TABLE),",
+            "     isolationLevel: 'READ_UNCOMMITTED') ~> MetadataStoreRead",
+            "ItemsListWithRenamedColumns call(mapColumn(",
+            "          each(match(true()))",
+            "     ),",
+            "     skipDuplicateMapInputs: false,",
+            "     skipDuplicateMapOutputs: false,",
+            "     output(",
+            "          headers as [string,string],",
+            "          body as string,",
+            "          status as string",
+            "     ),",
+            "     allowSchemaDrift: true,",
+            "     format: 'rest',",
+            "     store: 'restservice',",
+            "     timeout: 30,",
+            "     requestInterval: 0,",
+            "     headers = ['Run-Id' -> $runId],",
+            "     httpMethod: 'POST',",
+            "     entity: '/v1/discovery/profileByColumn',",
+            "     headerColumnName: 'headers',",
+            "     bodyColumnName: 'body',",
+            "     statusColumnName: 'status',",
+            "     addResponseCode: true,",
+            "     requestFormat: ['type' -> 'json']) ~> CallDCSForAzureProfiling",
+            "Source1MillRowDataSampling derive(DELPHIX_COMPLIANCE_SERVICE_RANDOM_ID = random(millisecond(currentTimestamp()))) ~> CreateRandomIdColumn",
+            "CreateRandomIdColumn sort(asc(DELPHIX_COMPLIANCE_SERVICE_RANDOM_ID, true)) ~> SortByRandomId",
+            "SortByRandomId keyGenerate(output(DELPHIX_COMPLIANCE_SERVICE_FINAL_SELECTION_ID as long),",
+            "     startAt: 1L,",
+            "     stepValue: 1L) ~> CreateFinalSelectionId",
+            "CreateFinalSelectionId filter(DELPHIX_COMPLIANCE_SERVICE_FINAL_SELECTION_ID < ($DF_NUM_ROWS_TO_PROFILE +1)) ~> GetRandomRows",
+            "GetRandomRows aggregate(each(match(name!='DELPHIX_COMPLIANCE_SERVICE_FINAL_SELECTION_ID'&&name!='DELPHIX_COMPLIANCE_SERVICE_RANDOM_ID'), concat('x',hex(encode($$))) = collect($$))) ~> CreateItemsList",
+            "CallDCSForAzureProfiling parse(body = body ? (timestamp as date,",
+            "          status as string,",
+            "          message as string,",
+            "          trace_id as string,",
+            "          items as (details as (columnName as string, domain as string, algorithm as string, confidence as float, rowsConsidered as integer)[])),",
+            "     format: 'json',",
+            "     documentForm: 'singleDocument') ~> ParseAPIResponse",
+            "ParseAPIResponse assert(expectTrue(toInteger(regexExtract(status, '(\\\\d+)', 1)) == 200, false, 'Failed_request', null, iif(isNull(body.message), status, concatWS(', ', 'timestamp: ' + toString(body.timestamp), 'status: ' + body.status, 'message: ' + body.message, 'trace_id: ' + body.trace_id))),",
+            "     abort: true) ~> AssertNoFailures",
+            "AssertNoFailures foldDown(unroll(body.items.details),",
+            "     mapColumn(",
+            "          columnName = body.items.details.columnName,",
+            "          domain = body.items.details.domain,",
+            "          algorithm = body.items.details.algorithm,",
+            "          confidence = body.items.details.confidence,",
+            "          rowsConsidered = body.items.details.rowsConsidered",
+            "     ),",
+            "     skipDuplicateMapInputs: false,",
+            "     skipDuplicateMapOutputs: false) ~> FlattenDetails",
+            "MetadataStoreRead filter(equalsIgnoreCase(dataset, 'DATABRICKS')",
+            "&& equalsIgnoreCase(specified_database, $DF_SOURCE_DB)",
+            "&& equalsIgnoreCase(specified_schema, $DF_SOURCE_SCHEMA)",
+            "&& equalsIgnoreCase(identified_table, $DF_SOURCE_TABLE)) ~> FilterRowsToUpdate",
+            "FlattenDetails, DeriveColumnsBasedOnInputParams join(columnName == identified_column,",
+            "     joinType:'inner',",
+            "     matchType:'exact',",
+            "     ignoreSpaces: false,",
+            "     broadcast: 'left')~> JoinDetailsAndMetadata",
+            "UpdateProfiledColumns alterRow(updateIf(true())) ~> ChecksBeforeSave",
+            "FilterOnlyNewlyProfiledRows derive(last_profiled_updated_timestamp = currentTimestamp(),",
+            "          row_count = $DF_TABLE_ROW_COUNT,",
+            "          source_metadata = $DF_METADATA) ~> UpdateProfiledColumns",
+            "JoinDetailsAndMetadata filter(!equalsIgnoreCase(domain, profiled_domain)",
+            "|| !equalsIgnoreCase(algorithm, profiled_algorithm)",
+            "|| rowsConsidered != rows_profiled",
+            "|| toDecimal(confidence) != toDecimal(confidence_score)",
+            "|| $DF_TABLE_ROW_COUNT != row_count) ~> FilterOnlyNewlyProfiledRows",
+            "CreateItemsList select(mapColumn(",
+            "          each(match(startsWith(name,'x')),",
+            "               decode(unhex(replace($$,'x',''))) = $$)",
+            "     ),",
+            "     skipDuplicateMapInputs: true,",
+            "     skipDuplicateMapOutputs: true) ~> ItemsListWithRenamedColumns",
+            "FilterRowsToUpdate derive(row_count = $DF_TABLE_ROW_COUNT,",
+            "          source_metadata = $DF_METADATA) ~> DeriveColumnsBasedOnInputParams",
+            "ChecksBeforeSave sink(allowSchemaDrift: true,",
+            "     validateSchema: false,",
+            "     input(",
+            "          dataset as string,",
+            "          specified_database as string,",
+            "          specified_schema as string,",
+            "          identified_table as string,",
+            "          identified_column as string,",
+            "          identified_column_type as string,",
+            "          identified_column_max_length as integer,",
+            "          ordinal_position as integer,",
+            "          row_count as long,",
+            "          source_metadata as string,",
+            "          profiled_domain as string,",
+            "          profiled_algorithm as string,",
+            "          confidence_score as decimal(6,5),",
+            "          rows_profiled as long,",
+            "          assigned_algorithm as string,",
+            "          last_profiled_updated_timestamp as timestamp,",
+            "          discovery_complete as boolean,",
+            "          latest_event as string,",
+            "          is_profiled as string,",
+            "          last_update_pipeline_id as string,",
+            "          algorithm_metadata as string",
+            "     ),",
+            "     format: 'table',",
+            "     store: 'sqlserver',",
+            "     schemaName: ($DF_METADATA_SCHEMA),",
+            "     tableName: ($DF_METADATA_RULESET_TABLE),",
+            "     insertable: false,",
+            "     updateable: true,",
+            "     deletable: false,",
+            "     upsertable: false,",
+            "     keys:(array(\"dataset\", \"specified_database\", \"specified_schema\", \"identified_table\", \"identified_column\")),",
+            "     skipKeyWrites:true,",
+            "     skipDuplicateMapInputs: true,",
+            "     skipDuplicateMapOutputs: true,",
+            "     errorHandlingOption: 'stopOnFirstError',",
+            "     mapColumn(",
+            "          dataset,",
+            "          specified_database,",
+            "          specified_schema,",
+            "          identified_table,",
+            "          identified_column,",
+            "          identified_column_type,",
+            "          identified_column_max_length,",
+            "          ordinal_position,",
+            "          row_count,",
+            "          source_metadata,",
+            "          profiled_domain = domain,",
+            "          profiled_algorithm = algorithm,",
+            "          confidence_score = confidence,",
+            "          rows_profiled = rowsConsidered,",
+            "          assigned_algorithm,",
+            "          last_profiled_updated_timestamp",
+            "     )) ~> WriteToMetadataStore"
+          ]
+        }
+      },
+      "dependsOn": []
+    }
+  ]
+}
